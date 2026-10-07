@@ -10,6 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
+using LeoKitchenFasti.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +35,7 @@ builder.Services.AddControllers()
             return new BadRequestObjectResult(errorResponse);
         };
     });
+builder.Services.AddSignalR(); // <- SignalR
 
 // --- 3. CORS (Abierto para todos en desarrollo) ---
 builder.Services.AddCors(options =>
@@ -180,6 +182,7 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<OrderHub>("/orderHub");
 
 // --- INTERCEPTOR DE ARRANQUE (LOGO ASCII) ---
 app.Lifetime.ApplicationStarted.Register(() =>
