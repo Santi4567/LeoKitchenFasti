@@ -1,0 +1,434 @@
+﻿using LeoKitchenFasti.Data;
+using LeoKitchenFasti.DTOs;
+using LeoKitchenFasti.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace LeoKitchenFasti.Services
+{
+    public class UserService : IUserService
+    {
+        private readonly AppDbContext _context;
+
+        public UserService(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        //Registrar Usuarios 
+        public async Task<User> RegisterAsync(RegisterUserDto datos, int requestorId)
+        {
+            // 1. VALIDACIÓN DE DUPLICADOS (Username)
+            var existe = await _context.Users.AnyAsync(u => u.Username == datos.Username);
+            if (existe) throw new Exception($"El usuario '{datos.Username}' ya existe.");
+
+            // 2. BUSCAR EL ROL QUE SE QUIERE ASIGNAR
+            var rolObjetivo = await _context.Roles
+                .FirstOrDefaultAsync(r => r.Nombre == datos.RolNombre);
+
+            if (rolObjetivo == null) throw new Exception($"El rol '{datos.RolNombre}' no es válido.");
+
+            // --- REGLA DE PROTECCIÓN DE ADMINS (AQUÍ ESTÁ LO NUEVO) ---
+            if (rolObjetivo.Nombre == "Admin")
+            {
+                // Buscamos quién está haciendo la petición
+                var creador = await _context.Users
+                    .Include(u => u.Rol)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.Id == requestorId);
+
+                // Si el creador no existe (raro) o SU ROL no es Admin...
+                if (creador == null || creador.Rol.Nombre != "Admin")
+                {
+                    throw new Exception("Acceso Denegado: Solo un Administrador puede crear cuentas con rol 'Admin'.");
+                }
+            }
+            // -----------------------------------------------------------
+
+            // 3. Encriptar contraseña
+            string passwordHash = BCrypt.Net.BCrypt.HashPassword(datos.Password);
+
+            // 4. Crear el usuario
+            var nuevoUsuario = new User
+            {
+                Username = datos.Username,
+                Passwd = passwordHash,
+                Name = datos.Name,
+                RolId = rolObjetivo.Id,
+                IsActive = false // Se crea desactivado por seguridad, como acordamos
+            };
+
+            _context.Users.Add(nuevoUsuario);
+            await _context.SaveChangesAsync();
+
+            // 5. Cargar datos visuales
+            await _context.Entry(nuevoUsuario).Reference(u => u.Rol).LoadAsync();
+
+            return nuevoUsuario;
+        }
+
+        //Obtener Datos del Usuario, Nombre,rol, permisos 
+
+        public async Task<UserProfileDto> GetUserProfileAsync(int userId)
+        {
+            // 1. Buscamos al usuario y TRAEMOS TODA LA FAMILIA (Rol y Permisos)
+            var user = await _context.Users
+                .AsNoTracking()
+                .Include(u => u.Rol)                // Trae el Rol
+                    .ThenInclude(r => r.Permisos)   // Trae los Permisos de ese Rol
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (user == null) throw new Exception("Usuario no encontrado");
+
+            // 2. LOGICA DE AGRUPAMIENTO (El truco)
+            // Suponemos que tus permisos son "verbo.entidad" (ej: "add.users")
+            // Usamos la "entidad" (users) como nombre del grupo.
+
+            var permisosAgrupados = user.Rol.Permisos
+                .GroupBy(p => {
+                    // Truco: Dividimos "add.users" por el punto y tomamos la última parte ("users")
+                    // Si el permiso no tiene puntos, se usa el nombre completo.
+                    var partes = p.NombreSistema.Split('.');
+                    return partes.Length > 1 ? partes.Last() : "General";
+                })
+                .ToDictionary(
+                    grupo => grupo.Key.ToUpper(), // La Clave: "USERS", "PRODUCTS"
+                    grupo => grupo.Select(p => p.NombreSistema).ToList() // La Lista: ["add.users", "edit.users"]
+                );
+
+            // 3. Mapeamos al DTO
+            return new UserProfileDto
+            {
+                Id = user.Id,
+                Username = user.Username,
+                Name = user.Name,
+                Rol = user.Rol.Nombre,
+                Permisos = permisosAgrupados
+            };
+        }
+        // Actualizar usuario
+
+        public async Task<User> UpdateUserAsync(int id, UpdateUserDto datos, int requestorId)
+        {
+            // 1. BUSCAR A LA VÍCTIMA (Target)
+            var user = await _context.Users
+                .Include(u => u.Rol) // Necesitamos el Rol actual
+                .FirstOrDefaultAsync(u => u.Id == id);
+
+            if (user == null) throw new Exception("Usuario no encontrado.");
+
+            // 2. BUSCAR AL EJECUTOR (Requestor)
+            var requestorUser = await _context.Users
+                .AsNoTracking() // Solo leemos
+                .Include(u => u.Rol)
+                .FirstOrDefaultAsync(u => u.Id == requestorId);
+
+            if (requestorUser == null) throw new Exception("Usuario ejecutor no válido.");
+
+            // --- REGLA 1: PROTECCIÓN DE RANGO (NO TOCAR ADMINS) ---
+            // Si intentas editar a un Admin... y TÚ NO eres Admin... ¡ERROR!
+            if (user.Rol.Nombre == "Admin" && requestorUser.Rol.Nombre != "Admin")
+            {
+                throw new Exception("No tienes rango suficiente para editar a un Administrador.");
+            }
+
+            // 3. VALIDAR EL NUEVO ROL (Anti-Escalada)
+            // Buscamos el ID del rol nuevo que mandaron en el JSON
+            var rolNuevo = await _context.Roles
+                .FirstOrDefaultAsync(r => r.Nombre == datos.RolNombre);
+
+            if (rolNuevo == null) throw new Exception($"El rol '{datos.RolNombre}' no existe.");
+
+            // --- REGLA 2: ANTI-ESCALADA (NO CREAR ADMINS) ---
+            // Si intentas ponerle el rol "Admin" a alguien... y TÚ NO eres Admin... ¡ERROR!
+            if (rolNuevo.Nombre == "Admin" && requestorUser.Rol.Nombre != "Admin")
+            {
+                throw new Exception("Acceso Denegado: Solo un Administrador puede asignar el rol 'Admin'.");
+            }
+
+            // 4. VALIDAR DUPLICADOS DE USERNAME
+            // (Igual que antes, pero asegurándonos de excluir al propio usuario)
+            bool nombreOcupado = await _context.Users
+                .AnyAsync(u => u.Username == datos.Username && u.Id != id);
+
+            if (nombreOcupado) throw new Exception($"El usuario '{datos.Username}' ya está en uso.");
+
+
+            // 5. APLICAR CAMBIOS
+            user.Name = datos.Name;
+            user.Username = datos.Username;
+            user.RolId = rolNuevo.Id; // Asignamos el ID seguro
+            user.IsActive = datos.IsActive;
+
+            // 6. GUARDAR
+            _context.Users.Update(user);
+            await _context.SaveChangesAsync();
+
+            // Recargamos la relación para devolver el objeto completo
+            await _context.Entry(user).Reference(u => u.Rol).LoadAsync();
+
+            return user;
+        }
+
+        //Cambio de contrasena 
+        public async Task<bool> ChangePasswordAsync(int userId, ChangePasswordDto datos)
+        {
+            // 1. Buscamos al usuario
+            var user = await _context.Users.FindAsync(userId);
+            if (user == null) throw new Exception("Usuario no encontrado.");
+
+            // 2. VERIFICAR LA CONTRASEÑA ACTUAL
+            // Comparamos lo que escribió el usuario vs el Hash que tenemos en la BD
+            bool passwordCorrecto = BCrypt.Net.BCrypt.Verify(datos.CurrentPassword, user.Passwd);
+
+            if (!passwordCorrecto)
+            {
+                throw new Exception("La contraseña actual es incorrecta.");
+            }
+
+            // 3. Validar que la nueva no sea igual a la anterior (Opcional, pero buena práctica)
+            if (datos.CurrentPassword == datos.NewPassword)
+            {
+                throw new Exception("La nueva contraseña no puede ser igual a la anterior.");
+            }
+
+            // 4. ENCRIPTAR LA NUEVA CONTRASEÑA
+            string nuevoHash = BCrypt.Net.BCrypt.HashPassword(datos.NewPassword);
+
+            // 5. Guardar cambios
+            user.Passwd = nuevoHash;
+
+            _context.Users.Update(user);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        //Metodo para que un admin pueda camabiar la contrasena de un usuario 
+        public async Task<bool> ResetPasswordByAdminAsync(int targetUserId, string newPassword)
+        {
+            // 1. Buscamos al usuario VICTIMA (al que se la vamos a cambiar)
+            var user = await _context.Users.FindAsync(targetUserId);
+            if (user == null) throw new Exception("El usuario especificado no existe.");
+
+            // 2. ENCRIPTAR LA NUEVA CONTRASEÑA DIRECTAMENTE
+            string nuevoHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+
+            // 3. Guardar cambios
+            user.Passwd = nuevoHash;
+
+            // Opcional: Podrías forzar que IsActive sea true si estaba bloqueado
+            // user.IsActive = true; 
+
+            _context.Users.Update(user);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        //GET: Traer todos los usuarios paginados y filtrados
+        public async Task<PagedResponse<UserDto>> GetAllUsersAsync(
+            int requestorId,
+            bool isActive = true,
+            int? rolId = null,
+            int pageNumber = 1,
+            int pageSize = 10)
+        {
+            // 0. Seguridad básica en la paginación
+            if (pageNumber < 1) pageNumber = 1;
+            if (pageSize < 1) pageSize = 10;
+            if (pageSize > 100) pageSize = 100;
+
+            // 1. AVERIGUAR QUIÉN PIDE LA LISTA
+            var requestor = await _context.Users
+                .AsNoTracking()
+                .Include(u => u.Rol)
+                .FirstOrDefaultAsync(u => u.Id == requestorId);
+
+            if (requestor == null) throw new Exception("Usuario solicitante no válido.");
+
+            // 2. PREPARAR LA CONSULTA BASE FILTRANDO POR ESTADO (IsActive)
+            // Por defecto es true (activos). Si mandan false, buscará inactivos.
+            var query = _context.Users
+                .AsNoTracking()
+                .Include(u => u.Rol)
+                .Where(u => u.IsActive == isActive)
+                .AsQueryable();
+
+            // 3. FILTRO DINÁMICO POR ROL
+            // Si el frontend envió un ID de rol válido (ej. rolId = 2 para Cajero), lo aplicamos
+            if (rolId.HasValue && rolId.Value > 0)
+            {
+                query = query.Where(u => u.RolId == rolId.Value);
+            }
+
+            // 4. APLICAR FILTRO DE VISIBILIDAD DE SEGURIDAD (Tu regla anti-espionaje)
+            // Si el que pide la lista NO ES ADMIN, ocultamos a los Admins de la lista
+            if (requestor.Rol.Nombre != "Admin")
+            {
+                query = query.Where(u => u.Rol.Nombre != "Admin");
+            }
+
+            // 5. CONTAR EL TOTAL DE REGISTROS QUE COINCIDEN CON TODOS LOS FILTROS
+            var totalItems = await query.CountAsync();
+
+            // 6. EJECUTAR PAGINACIÓN EN MARIADB Y PROYECTAR AL DTO
+            var usuarios = await query
+                .OrderBy(u => u.Name) // Orden constante para paginación precisa
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(u => new UserDto
+                {
+                    Id = u.Id,
+                    Name = u.Name,
+                    Username = u.Username,
+                    Rol = u.Rol.Nombre,
+                    IsActive = u.IsActive
+                })
+                .ToListAsync();
+
+            // 7. EMPACAR EN TU DTO ESTÁNDAR
+            var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+
+            return new PagedResponse<UserDto>
+            {
+                Data = usuarios,
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = pageNumber
+            };
+        }
+
+        // GET: Traer todos los usuarios paginados, filtrados y con búsqueda
+        public async Task<PagedResponse<UserDto>> GetAllUsersAsync(
+            int requestorId,
+            string? termino = null, // <-- Nuevo parámetro
+            bool isActive = true,
+            int? rolId = null,
+            int pageNumber = 1,
+            int pageSize = 10)
+        {
+            // 0. Seguridad básica en la paginación
+            if (pageNumber < 1) pageNumber = 1;
+            if (pageSize < 1) pageSize = 10;
+            if (pageSize > 100) pageSize = 100;
+
+            // 1. AVERIGUAR QUIÉN PIDE LA LISTA
+            var requestor = await _context.Users
+                .AsNoTracking()
+                .Include(u => u.Rol)
+                .FirstOrDefaultAsync(u => u.Id == requestorId);
+
+            if (requestor == null) throw new Exception("Usuario solicitante no válido.");
+
+            // 2. PREPARAR LA CONSULTA BASE FILTRANDO POR ESTADO (IsActive)
+            var query = _context.Users
+                .AsNoTracking()
+                .Include(u => u.Rol)
+                .Where(u => u.IsActive == isActive)
+                .AsQueryable();
+
+            // 3. FILTRO POR TÉRMINO DE BÚSQUEDA (La magia unificada)
+            if (!string.IsNullOrWhiteSpace(termino))
+            {
+                query = query.Where(u => u.Name.Contains(termino) || u.Username.Contains(termino));
+            }
+
+            // 4. FILTRO DINÁMICO POR ROL
+            if (rolId.HasValue && rolId.Value > 0)
+            {
+                query = query.Where(u => u.RolId == rolId.Value);
+            }
+
+            // 5. APLICAR FILTRO DE VISIBILIDAD DE SEGURIDAD (Regla anti-espionaje)
+            if (requestor.Rol.Nombre != "Admin")
+            {
+                query = query.Where(u => u.Rol.Nombre != "Admin");
+            }
+
+            // 6. CONTAR EL TOTAL DE REGISTROS QUE COINCIDEN CON TODOS LOS FILTROS
+            var totalItems = await query.CountAsync();
+
+            // 7. EJECUTAR PAGINACIÓN EN LA BD Y PROYECTAR AL DTO
+            var usuarios = await query
+                .OrderBy(u => u.Name) // Orden constante para paginación precisa
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(u => new UserDto
+                {
+                    Id = u.Id,
+                    Name = u.Name,
+                    Username = u.Username,
+                    Rol = u.Rol.Nombre,
+                    IsActive = u.IsActive
+                })
+                .ToListAsync();
+
+            // 8. EMPACAR EN TU DTO ESTÁNDAR
+            var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+
+            return new PagedResponse<UserDto>
+            {
+                Data = usuarios,
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = pageNumber
+            };
+        }
+
+        //Desactivar usuarios 
+        public async Task<bool> DeleteUserAsync(int targetUserId, int requestorId)
+        {
+            // 1. BUSCAR A LA VÍCTIMA (Target)
+            var targetUser = await _context.Users
+                .Include(u => u.Rol) // Necesitamos saber su rol
+                .FirstOrDefaultAsync(u => u.Id == targetUserId);
+
+            if (targetUser == null) throw new Exception("El usuario a eliminar no existe.");
+
+            // 2. BUSCAR AL EJECUTOR (Requestor)
+            var requestorUser = await _context.Users
+                .Include(u => u.Rol)
+                .FirstOrDefaultAsync(u => u.Id == requestorId);
+
+            if (requestorUser == null) throw new Exception("Usuario ejecutor no válido.");
+
+            // --- REGLA 1: PROTECCIÓN DE RANGO ---
+            // "Alguien con permiso delete.users NO puede eliminar admins, solo entre ellos"
+            // Si la víctima es Admin... Y el que intenta borrarlo NO es Admin... ¡ERROR!
+            if (targetUser.Rol.Nombre == "Admin" && requestorUser.Rol.Nombre != "Admin")
+            {
+                throw new Exception("No tienes rango suficiente para eliminar a un Administrador.");
+            }
+
+            // --- REGLA 2: EL ÚLTIMO HOMBRE EN PIE ---
+            // "Siempre debe haber un admin"
+            if (targetUser.Rol.Nombre == "Admin")
+            {
+                // Contamos cuántos admins hay en total
+                int totalAdmins = await _context.Users
+                    .CountAsync(u => u.Rol.Nombre == "Admin");
+
+                if (totalAdmins <= 1)
+                {
+                    throw new Exception("No puedes eliminar al último Administrador del sistema. Debe quedar al menos uno.");
+                }
+            }
+
+            // --- EJECUCIÓN ---
+            try
+            {
+                _context.Users.Remove(targetUser);
+                await _context.SaveChangesAsync();
+                return true;
+            }
+            catch (DbUpdateException)
+            {
+                // ESTO ES IMPORTANTE:
+                // Si el usuario ya hizo ventas o cortes, SQL no te dejará borrarlo (Integridad Referencial).
+                // En ese caso, sugerimos desactivarlo.
+                throw new Exception("No se puede eliminar este usuario porque tiene registros asociados (Ventas, Pedidos). Te sugerimos desactivarlo (IsActive = false) en lugar de borrarlo.");
+            }
+        }
+    }
+
+}

@@ -1,0 +1,8 @@
+
+dotnet add LeoKitchenFasti.csproj package Pomelo.EntityFrameworkCore.MySql --version 8.0.2
+dotnet add LeoKitchenFasti.csproj package Microsoft.EntityFrameworkCore.Design --version 8.0.10
+dotnet add LeoKitchenFasti.csproj package Microsoft.AspNetCore.Authentication.JwtBearer --version 8.0.10
+
+Pomelo.EntityFrameworkCore.MySql: Es el "motor" que se encarga de traducir clases y consultas de C# al dialecto exacto que utiliza MariaDB.
+
+Microsoft.EntityFrameworkCore.Design: Es el paquete obligatorio para poder usar la consola de herramientas (como dotnet ef migrations add) y generar las tablas automáticamente.
