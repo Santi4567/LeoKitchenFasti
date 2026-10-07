@@ -1,0 +1,6 @@
+@LeoKitchenFasti_HostAddress = http://localhost:5026
+
+GET {{LeoKitchenFasti_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
