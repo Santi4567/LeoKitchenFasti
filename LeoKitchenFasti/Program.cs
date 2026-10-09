@@ -51,9 +51,11 @@ builder.Services.AddCors(options =>
 
 // --- 4. INYECCIÓN DE DEPENDENCIAS (Servicios) ---
 // Aquí registramos solo lo del MVP del restaurante
-builder.Services.AddScoped<AuthService>();
-builder.Services.AddScoped<IUserService, UserService>();
-// (Más adelante agregaremos aquí los servicios de Mesas y SignalR)
+builder.Services.AddScoped<AuthService>(); // <-- Auntenticacion 
+
+builder.Services.AddScoped<IUserService, UserService>(); // <-- Servicio de Usuarios
+
+builder.Services.AddScoped<IOrderService, OrderService>(); // <-- Servicios de Ordens (SignalR)
 
 // --- 5. SEGURIDAD: JWT Y COOKIES ---
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -182,6 +184,8 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+app.MapHub<LeoKitchenFasti.Hubs.RestaurantHub>("/restaurantHub"); // <--- 2. ABRE EL CANAL
 app.MapHub<OrderHub>("/orderHub");
 
 // --- INTERCEPTOR DE ARRANQUE (LOGO ASCII) ---

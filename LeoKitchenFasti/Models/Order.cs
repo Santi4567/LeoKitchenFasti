@@ -7,10 +7,10 @@
         public int Id { get; set; }
 
         public int TableId { get; set; }
-        public Table Table { get; set; } = null!;
+        public Table? Table { get; set; } 
 
         public int WaiterId { get; set; }
-        public User Waiter { get; set; } = null!;
+        public User? Waiter { get; set; } 
 
         public OrderStatus Status { get; set; } = OrderStatus.Abierta;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
