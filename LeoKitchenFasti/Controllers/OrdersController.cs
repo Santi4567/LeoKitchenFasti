@@ -1,7 +1,8 @@
-﻿using LeoKitchenFasti.DTOs;
+﻿using LeoKitchenFasti.Attributes;
+using LeoKitchenFasti.DTOs;
+using LeoKitchenFasti.Extensions;
 using LeoKitchenFasti.Models;
 using LeoKitchenFasti.Services;
-using LeoKitchenFasti.Extensions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -20,7 +21,7 @@ namespace LeoKitchenFasti.Controllers
         }
 
         [HttpPost("create")]
-        [Authorize(Roles = "Admin,Mesero")]
+        [RequierePermiso("add.orders")]
         public async Task<ActionResult<ApiResponse<object>>> CreateOrder([FromBody] Order nuevaOrden)
         {
             // Extraer el ID del usuario del Token
@@ -30,6 +31,14 @@ namespace LeoKitchenFasti.Controllers
             var ordenGenerada = await _orderService.CreateOrderAsync(nuevaOrden, meseroId);
 
             return Ok(ApiResponse<object>.Exito(ordenGenerada, "Orden enviada a cocina exitosamente"));
+        }
+
+        [HttpGet("active")]
+        [RequierePermiso("view.orders")]
+        public async Task<ActionResult<ApiResponse<List<Order>>>> GetActiveOrders()
+        {
+            var ordenes = await _orderService.GetActiveOrdersAsync();
+            return Ok(ApiResponse<List<Order>>.Exito(ordenes, "Órdenes activas de cocina"));
         }
     }
 }

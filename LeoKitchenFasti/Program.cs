@@ -57,6 +57,8 @@ builder.Services.AddScoped<IUserService, UserService>(); // <-- Servicio de Usua
 
 builder.Services.AddScoped<IOrderService, OrderService>(); // <-- Servicios de Ordens (SignalR)
 
+builder.Services.AddScoped<LeoKitchenFasti.Services.PermissionService>(); // <-- Servicio de Permisos (Bastante importante)
+
 // --- 5. SEGURIDAD: JWT Y COOKIES ---
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

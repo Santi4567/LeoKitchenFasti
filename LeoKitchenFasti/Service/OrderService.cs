@@ -42,5 +42,19 @@ namespace LeoKitchenFasti.Services
 
             return ordenCompleta;
         }
+
+        //Ver Ordenes 
+        public async Task<List<Order>> GetActiveOrdersAsync()
+        {
+            return await _context.Orders
+                .Include(o => o.Items)
+                    .ThenInclude(i => i.Product)
+                .Include(o => o.Table)
+                    .ThenInclude(t => t.Area)
+                .Where(o => o.Status == OrderStatus.Abierta &&
+                            o.Items.Any(i => i.Status == ItemStatus.Pendiente || i.Status == ItemStatus.EnPreparacion))
+                .OrderBy(o => o.CreatedAt)
+                .ToListAsync();
+        }
     }
 }
