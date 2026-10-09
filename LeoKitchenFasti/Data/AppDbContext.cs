@@ -19,6 +19,7 @@ namespace LeoKitchenFasti.Data
 
         // --- TABLAS DEL RESTAURANTE (La nueva operación) ---
         public DbSet<Table> Tables { get; set; }
+        public DbSet<Area> Areas { get; set; }
         public DbSet<Product> Products { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }

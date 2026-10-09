@@ -1,4 +1,6 @@
-﻿namespace LeoKitchenFasti.Models
+﻿using System.ComponentModel.DataAnnotations.Schema;
+
+namespace LeoKitchenFasti.Models
 {
     public enum TableStatus { Libre, Ocupada }
 
@@ -7,5 +9,11 @@
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty; // Ej: "Mesa 1"
         public TableStatus Status { get; set; } = TableStatus.Libre;
+
+        // --- Relación con el Área ---
+        public int AreaId { get; set; }
+
+        [ForeignKey("AreaId")]
+        public Area Area { get; set; } = null!;
     }
 }

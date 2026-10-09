@@ -13,6 +13,9 @@
         public Product Product { get; set; } = null!;
 
         public int Quantity { get; set; }
+
+        public decimal UnitPrice { get; set; }
+
         public string? Notes { get; set; }
 
         public ItemStatus Status { get; set; } = ItemStatus.Pendiente;
